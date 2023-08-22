@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 throw() {
   echo "$*" >&2
@@ -8,20 +8,38 @@ throw() {
 BRIEF=0
 LEAFONLY=0
 PRUNE=0
+FILTER=
 NO_HEAD=0
 NORMALIZE_SOLIDUS=0
 
 usage() {
   echo
-  echo "Usage: JSON.sh [-b] [-l] [-p] [-s] [-h]"
+  echo "Usage: JSON.sh [-b] [-l] [-p] [-f=<filter>] [-s] [-h]"
   echo
   echo "-p - Prune empty. Exclude fields with empty values."
   echo "-l - Leaf only. Only show leaf nodes, which stops data duplication."
   echo "-b - Brief. Combines 'Leaf only' and 'Prune empty' options."
   echo "-n - No-head. Do not show nodes that have no path (lines that start with [])."
   echo "-s - Remove escaping of the solidus symbol (straight slash)."
+  echo "-f - Filter. Only print the values for the keys that match the specified filter"
   echo "-h - This help text."
   echo
+}
+
+escape_string() {
+    local str=$1
+
+    str=${str//\\\"/\"}
+    str=${str//\\\\/\\}
+    str=${str//\\\//\/}
+    str=${str//\\b/$'\b'}
+    str=${str//\\f/$'\f'}
+    str=${str//\\n/$'\n'}
+    str=${str//\\r/$'\r'}
+    str=${str//\\t/$'\t'}
+    # TODO: unicode escaping
+
+    REPLY=$str
 }
 
 parse_options() {
@@ -40,6 +58,8 @@ parse_options() {
       -l) LEAFONLY=1
       ;;
       -p) PRUNE=1
+      ;;
+      -f=*) FILTER=${1#-f=}
       ;;
       -n) NO_HEAD=1
       ;;
@@ -138,7 +158,7 @@ parse_object () {
       while :
       do
         case "$token" in
-          '"'*'"') key=$token ;;
+          '"'*'"') escape_string "$token"; key=$REPLY ;;
           *) throw "EXPECTED string GOT ${token:-EOF}" ;;
         esac
         read -r token
@@ -170,7 +190,7 @@ parse_value () {
     '[') parse_array  "$jpath" ;;
     # At this point, the only valid single-character tokens are digits.
     ''|[!0-9]) throw "EXPECTED value GOT ${token:-EOF}" ;;
-    *) value=$token
+    *) escape_string "$token"; value=$REPLY
        # if asked, replace solidus ("\/") in json strings with normalized value: "/"
        [ "$NORMALIZE_SOLIDUS" -eq 1 ] && value=$(echo "$value" | sed 's#\\/#/#g')
        isleaf=1
@@ -185,8 +205,16 @@ parse_value () {
   [ "$LEAFONLY" -eq 0 ] && [ "$PRUNE" -eq 1 ] && [ "$isempty" -eq 0 ] && print=1
   [ "$LEAFONLY" -eq 1 ] && [ "$isleaf" -eq 1 ] && \
     [ $PRUNE -eq 1 ] && [ $isempty -eq 0 ] && print=1
-  [ "$print" -eq 1 ] && printf "[%s]\t%s\n" "$jpath" "$value"
-  :
+
+  if [ "$print" -eq 1 ]; then
+    if [ -n "$FILTER" ]; then
+      if [ "$FILTER" = "$jpath" ]; then
+        printf '%s\n' "$value"
+      fi
+    else
+      printf "[%s]\t%s\n" "$jpath" "$value"
+    fi
+  fi
 }
 
 parse () {
